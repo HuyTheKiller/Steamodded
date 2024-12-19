@@ -1,22 +1,26 @@
 # Documentation
 ## To do
+- Sticker
+- Seal
+- Challenge
+- DeckSkin
+
+## In progress
+- Enhancement
+
+## Done
+
+- Atlas
+- Center (Joker, Consumable, Voucher, Back, Booster)
+- Blind
+- ObjectType
+- UndiscoveredSprite
+- Edition
 - Language
 - Sound
 - Stake
-- Seal
+- PokerHand
 - Suit
 - Rank
-- PokerHand
-- Challenge
+- Rarity
 - Tag
-- Sticker
-- PayoutArg
-- Enhancement
-## In progress
-
-## Done
-- Atlas
-- Center (Joker, Consumable, Voucher, Back)
-- Blind
-- ConsumableType
-- UndiscoveredSprite

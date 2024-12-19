@@ -3,7 +3,7 @@
 --- MOD_ID: LabyrinthDeck
 --- MOD_AUTHOR: [MathIsFun_]
 --- MOD_DESCRIPTION: Implements an unused deck hidden in the game's textures
---- LOADER_VERSION_GEQ: 1.0.0
+--- DEPENDENCIES: [Steamodded>=1.0.0~ALPHA-0812d]
 
 ----------------------------------------------
 ------------MOD CODE -------------------------
@@ -16,11 +16,14 @@ SMODS.Back{
 	loc_txt = {
 		name = "Labyrinth Deck",
 		text = {
-			"{C:red}+5{} discards",
-			"{C:blue}-3{} hands",
+			"{C:red}+#1#{} discards",
+			"{C:blue}#2#{} hands",
 			"every round"
 		}
 	},
+	loc_vars = function(self)
+		return { vars = { self.config.discards, self.config.hands }}
+	end
 }
 
 ----------------------------------------------

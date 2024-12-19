@@ -36,9 +36,12 @@ local in_pool_func =
 	args and args.in_pool
 	or type(v) == 'table' and type(v.in_pool) == 'function' and v.in_pool
 	or _t == G.P_CARDS and function(c)
+			--Handles special case for Erratic Deck
+			local initial_deck = args and args.starting_deck or false
+			
 			return not (
-				type(SMODS.Ranks[c.value].in_pool) == 'function' and not SMODS.Ranks[c.value]:in_pool({initial_deck = true})
-				or type(SMODS.Suits[c.suit].in_pool) == 'function' and not SMODS.Suits[c.suit]:in_pool({initial_deck = true})
+				type(SMODS.Ranks[c.value].in_pool) == 'function' and not SMODS.Ranks[c.value]:in_pool({initial_deck = initial_deck})
+				or type(SMODS.Suits[c.suit].in_pool) == 'function' and not SMODS.Suits[c.suit]:in_pool({initial_deck = initial_deck})
 			)
 		end
 if in_pool_func then
@@ -70,23 +73,15 @@ pattern = "else _starting_pool, _pool_key = G.P_CENTER_POOLS[_type], _type..(_ap
 match_indent = true
 position = 'before'
 payload = '''
-elseif SMODS.ConsumableTypes[_type] and SMODS.ConsumableTypes[_type].rarities then
-	local rarities = SMODS.ConsumableTypes[_type].rarities
+elseif SMODS.ObjectTypes[_type] and SMODS.ObjectTypes[_type].rarities then
+	local rarities = SMODS.ObjectTypes[_type].rarities
 	local rarity
 	if _legendary and rarities.legendary then
 		rarity = rarities.legendary.key
 	else
-		rarity = _rarity or pseudorandom('rarity_'.._type..G.GAME.round_resets.ante..(_append or ''))
-		for _, v in ipairs(rarities) do
-			if rarity <= v.rate then
-				rarity = v.key
-				break
-			else
-				rarity = rarity - v.rate
-			end
-		end
+		rarity = _rarity or SMODS.poll_rarity(_type, 'rarity_'.._type..G.GAME.round_resets.ante..(_append or ''))
 	end
-	_starting_pool, _pool_key = SMODS.ConsumableTypes[_type].rarity_pools[rarity], _type..rarity..(_append or '')'''
+	_starting_pool, _pool_key = SMODS.ObjectTypes[_type].rarity_pools[rarity], _type..rarity..(_append or '')'''
 
 [[patches]]
 [patches.pattern]
@@ -95,8 +90,8 @@ pattern = "if _type == 'Tarot' or _type == 'Tarot_Planet' then _pool[#_pool + 1]
 match_indent = true
 position = 'at'
 payload = '''
-if SMODS.ConsumableTypes[_type] and SMODS.ConsumableTypes[_type].default and G.P_CENTERS[SMODS.ConsumableTypes[_type].default] then
-	_pool[#_pool+1] = SMODS.ConsumableTypes[_type].default
+if SMODS.ObjectTypes[_type] and SMODS.ObjectTypes[_type].default and G.P_CENTERS[SMODS.ObjectTypes[_type].default] then
+	_pool[#_pool+1] = SMODS.ObjectTypes[_type].default
 elseif _type == 'Tarot' or _type == 'Tarot_Planet' then _pool[#_pool + 1] = "c_strength"'''
 
 [[patches]]
@@ -107,28 +102,53 @@ match_indent = true
 position = 'at'
 payload = "if v.name == 'Black Hole' or v.name == 'The Soul' or v.hidden then"
 
-# TODO currently this overrides all base game checks
-# Probably move this down below all the add = _ and add an override flag "override_base_checks"
 [[patches]]
 [patches.pattern]
 target = 'functions/common_events.lua'
 pattern = "if _type == 'Enhanced' then"
 match_indent = true
+position = 'before'
+payload = '''
+local in_pool, pool_opts
+if v.in_pool and type(v.in_pool) == 'function' then
+	in_pool, pool_opts = v:in_pool({ source = _append })
+end
+pool_opts = pool_opts or {}
+'''
+
+[[patches]]
+[patches.pattern]
+target = 'functions/common_events.lua'
+pattern = 'elseif not (G.GAME.used_jokers[v.key] and not next(find_joker("Showman"))) and'
+match_indent = true
 position = 'at'
+payload = '''elseif not (G.GAME.used_jokers[v.key] and not pool_opts.allow_duplicates and not next(find_joker("Showman"))) and'''
+
+[[patches]]
+[patches.pattern]
+target = 'functions/common_events.lua'
+pattern = "if add and not G.GAME.banned_keys[v.key] then"
+match_indent = true
+position = 'before'
 payload = '''
 if v.in_pool and type(v.in_pool) == 'function' then
-	-- TODO currently this overrides all base game checks
-	if (_type == 'Enhanced' or _type == 'Tag' or v.set == 'Voucher' or v.set == 'Planet') then
-		sendWarnMessage(("get_current_pool(): in_pool() may not work correctly on a card of _type=%s"):format(_type))
-	end
-	local res, pool_opts = v:in_pool()
-	if res and (not G.GAME.used_jokers[v.key] or (pool_opts and pool_opts.allow_duplicates) or next(find_joker("Showman"))) then
-		add = true
-	end
-elseif _type == 'Enhanced' then'''
+	add = in_pool and (add or pool_opts.override_base_checks)
+end
+'''
 
 ## G.GAME.used_jokers now checks keys, not names
 # Card:set_ability()
+# Remove the old center from `used_jokers` if set_ability overrides
+[[patches]]
+[patches.pattern]
+target = "card.lua"
+pattern = "local old_center = self.config.center"
+position = 'after'
+payload = '''
+if old_center and not next(SMODS.find_card(old_center.key, true)) then
+    G.GAME.used_jokers[old_center.key] = nil
+end'''
+match_indent = true
 [[patches]]
 [patches.regex]
 target = "card.lua"
@@ -140,7 +160,9 @@ pattern = '''
 [\t ]*end'''
 position = "at"
 payload = '''
-G.GAME.used_jokers[self.config.center_key] = true
+if self.config.center.key then
+	G.GAME.used_jokers[self.config.center.key] = true
+end
 '''
 line_prepend = "$indent"
 # Card:remove()
@@ -157,7 +179,7 @@ pattern = '''
 [\t ]*end'''
 position = "at"
 payload = '''
-if not next(SMODS.find_card(self.config.center_key, true)) then
-    G.GAME.used_jokers[self.config.center_key] = nil
+if not next(SMODS.find_card(self.config.center.key, true)) then
+    G.GAME.used_jokers[self.config.center.key] = nil
 end'''
 line_prepend = "$indent"

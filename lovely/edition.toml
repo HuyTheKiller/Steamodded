@@ -78,6 +78,69 @@ for _, v in ipairs(G.P_CENTER_POOLS.Edition) do
 	G.BADGE_COL[v.key:sub(3)] = v.badge_colour
 end'''
 
+# Limit ARGS.send_to_shader[1] to wiggle between 0 and 2 instead of growing infinitely
+# this makes shaders responsiveness on tilt reliable over time
+# Card:draw()
+[[patches]]
+[patches.regex]
+target = "card.lua"
+pattern = '''
+G\.TIMERS\.REAL/\(28\)'''
+position = "at"
+payload = '''math.sin(G.TIMERS.REAL/28) + 1'''
+
+# Allow editions to not draw shadow
+# Card:draw()
+[[patches]]
+[patches.regex]
+target = "card.lua"
+pattern = '''
+self\.ability\.effect ~= 'Glass Card' and not self\.greyed'''
+position = "after"
+payload = ''' and self:should_draw_shadow() '''
+
+# If shader modifies shape of card, this will stop "back" layer of the card being rendered.
+# Card:draw()
+[[patches]]
+[patches.pattern]
+target = "card.lua"
+pattern = '''
+elseif not self.greyed then'''
+position = "before"
+payload = '''
+elseif not self:should_draw_base_shader() then
+    -- Don't render base dissolve shader.
+'''
+match_indent = true
+
+# If shader modifies shape of card, this will stop "back" layer of the card being rendered.
+# spectral cards and booster packs only.
+# Card:draw()
+[[patches]]
+[patches.pattern]
+target = "card.lua"
+pattern = '''
+if self.ability.set == 'Booster' or self.ability.set == 'Spectral' then'''
+position = "at"
+payload = '''
+if (self.ability.set == 'Booster' or self.ability.set == 'Spectral') and self:should_draw_base_shader() then'''
+match_indent = true
+
+# If shader modifies shape of card, this will stop "back" layer of the card being rendered.
+# invisible joker and vouchers.
+# Card:draw()
+[[patches]]
+[patches.pattern]
+target = "card.lua"
+pattern = '''
+self.children.center:draw_shader('voucher', nil, self.ARGS.send_to_shader)'''
+position = "at"
+payload = '''
+if self:should_draw_base_shader() then
+    self.children.center:draw_shader('voucher', nil, self.ARGS.send_to_shader)
+end'''
+match_indent = true
+
 # Inject shaders applying to cards
 # Card:draw()
 [[patches]]
@@ -91,7 +154,7 @@ position = "at"
 payload = '''
 if self.edition then
     for k, v in pairs(G.P_CENTER_POOLS.Edition) do
-        if self.edition[v.key:sub(3)] then
+        if self.edition[v.key:sub(3)] and v.shader then
             self.children.center:draw_shader(v.shader, nil, self.ARGS.send_to_shader)
             if self.children.front and self.ability.effect ~= 'Stone Card' and not self.config.center.replace_base_card then
                 self.children.front:draw_shader(v.shader, nil, self.ARGS.send_to_shader)
@@ -142,8 +205,6 @@ for k, v in pairs(G.P_CENTER_POOLS.Edition) do
     if self.edition[v.key:sub(3)] then
         if v.extra_cost then
             self.extra_cost = self.extra_cost + v.extra_cost
-        else
-            self.extra_cost = 0
         end
     end
 end'''
@@ -182,7 +243,7 @@ if G.jokers then
         if self.edition and self.edition.card_limit then
             if self.ability.consumeable then
                 G.consumeables.config.card_limit = G.consumeables.config.card_limit - self.edition.card_limit
-            else
+            elseif self.ability.set == 'Joker' then
                 G.jokers.config.card_limit = G.jokers.config.card_limit - self.edition.card_limit
             end'''
 line_prepend = "$indent"
@@ -197,7 +258,7 @@ if self.ability.joker_added_to_deck_but_debuffed then
     if self.edition and self.edition.card_limit then
         if self.ability.consumeable then
             G.consumeables.config.card_limit = G.consumeables.config.card_limit - self.edition.card_limit
-        else
+        elseif self.ability.set == 'Joker' then
             G.jokers.config.card_limit = G.jokers.config.card_limit - self.edition.card_limit
         end'''
 line_prepend = "$indent"
@@ -292,28 +353,52 @@ match_indent = true
 
 
 
-# Negative playing card logic
+## Negative playing card logic
+# CardArea:emplace()
 [[patches]]
 [patches.pattern]
 target = "cardarea.lua"
-pattern = "self:emplace(card, nil, stay_flipped)"
-position = "before"
+pattern = "function CardArea:emplace(*"
+position = "after"
 payload = '''
-if card.edition and card.edition.card_limit then
-    self.config.card_limit = self.config.card_limit + card.edition.card_limit
-    self:draw_card_from(area, stay_flipped, discarded_only)
-end'''
+    if card.edition and card.edition.card_limit and (self == G.hand) then
+        self.config.real_card_limit = (self.config.real_card_limit or self.config.card_limit) + card.edition.card_limit
+        self.config.card_limit = math.max(0, self.config.real_card_limit)
+    end'''
 match_indent = true
+# CardArea:remove_card()
 [[patches]]
 [patches.pattern]
 target = "cardarea.lua"
 pattern = "card:remove_from_area()"
 position = "before"
 payload = '''
-if card.edition and card.edition.card_limit and (card.area == G.hand or card.area == G.play) then
-    self.config.card_limit = self.config.card_limit - card.edition.card_limit
+if card.edition and card.edition.card_limit and (self == G.hand) then
+    self.config.real_card_limit = (self.config.real_card_limit or self.config.card_limit) - card.edition.card_limit
+    self.config.card_limit = math.max(0, self.config.real_card_limit)
 end'''
 match_indent = true
+
+# G.FUNCS.draw_from_deck_to_hand()
+[[patches]]
+[patches.pattern]
+target = "functions/state_events.lua"
+pattern = "local hand_space = e or*"
+position = "at"
+payload = """local hand_space = e
+if not hand_space then
+    local limit = G.hand.config.card_limit - #G.hand.cards
+    local n = 0
+    while n < #G.deck.cards do
+        local card = G.deck.cards[#G.deck.cards-n]
+        limit = limit - 1 + (card.edition and card.edition.card_limit or 0)
+        if limit < 0 then break end
+        n = n + 1
+    end
+    hand_space = n
+end"""
+match_indent = true
+
 [[patches]]
 [patches.pattern]
 target = "card.lua"
@@ -323,6 +408,28 @@ payload = """
 elseif self.edition.type == 'negative' and (self.ability.set == 'Enhanced' or self.ability.set == 'Default') then
     badges[#badges + 1] = 'negative_playing_card'"""
 match_indent = true
+
+[[patches]]
+[patches.pattern]
+target = "engine/sprite.lua"
+pattern = "love.graphics.setShader( G.SHADERS[_shader or 'dissolve'],  G.SHADERS[_shader or 'dissolve'])"
+position = "before"
+payload = '''
+local p_shader = SMODS.Shader.obj_table[_shader or 'dissolve']
+if p_shader and type(p_shader.send_vars) == "function" then
+    local sh = G.SHADERS[_shader or 'dissolve']
+    local parent_card = self.role.major and self.role.major:is(Card) and self.role.major
+    local send_vars = p_shader.send_vars(self, parent_card)
+    
+    if type(send_vars) == "table" then
+        for key, value in pairs(send_vars) do
+            sh:send(key, value)
+        end
+    end
+end
+'''
+match_indent = true
+
 [[patches]]
 [patches.pattern]
 target = "functions/UI_definitions.lua"
@@ -330,3 +437,77 @@ pattern = "if v == 'negative_consumable' then v = 'negative' end"
 position = "at"
 payload = '''if v == 'negative_consumable' or v == 'negative_playing_card' then v = 'negative' end'''
 match_indent = true
+
+# 
+[[patches]]
+[patches.regex]
+target = 'functions/common_events.lua'
+pattern = '''(?<indent>[\t ]*)(?<edi>local edition = poll_edition\('edi'\.\.\(key_append or ''\)\.\.G\.GAME\.round_resets\.ante\)(\n.*){2})'''
+position = 'at'
+line_prepend = '$indent'
+payload = '''
+if not SMODS.bypass_create_card_edition then
+    $edi
+end'''
+
+# eval_card() - add calculation calls for editions
+[[patches]]
+[patches.pattern]
+target = "functions/common_events.lua"
+pattern = "if context.cardarea == G.jokers or context.card == G.consumeables then"
+match_indent = true
+position = "before"
+payload = """
+if card.edition and card.edition.key then
+    local ed = SMODS.Centers[card.edition.key]
+    if ed.calculate and type(ed.calculate) == 'function' then
+        context.from_playing_card = true
+        ed:calculate(card, context)
+        context.from_playing_card = nil
+    end
+end"""
+
+# G.FUNCS.use_card() - add calculation calls for editions
+[[patches]]
+[patches.pattern]
+target = "functions/button_callbacks.lua"
+pattern = "e.config.ref_table:use_consumeable(area)"
+match_indent = true
+position = "after"
+payload = """
+if card.edition and card.edition.key then
+    local ed = SMODS.Centers[card.edition.key]
+    if ed.calculate and type(ed.calculate) == 'function' then
+        ed:calculate(card, {from_consumable = true})
+    end
+end"""
+
+# G.FUNCS.evaluate_play() - calculate playing card retriggers from editions
+[[patches]]
+[patches.pattern]
+target = "functions/state_events.lua"
+pattern = "for j=1,#reps do"
+match_indent = true
+position = "before"
+payload = """
+--From edition
+if scoring_hand[i].edition and scoring_hand[i].edition.key then
+    local ed = SMODS.Centers[scoring_hand[i].edition.key]
+    if ed.config and ed.config.retriggers then
+        for h = 1, ed.config.retriggers do
+            reps[#reps+1] = {seals = {
+                message = localize("k_again_ex"),
+                card = scoring_hand[i]
+            }}
+        end
+    end
+    if ed.calculate and type(ed.calculate) == 'function' then
+        local check = ed:calculate(scoring_hand[i], {retrigger_edition_check = true, cardarea = G.play, full_hand = G.play.cards, scoring_hand = scoring_hand, scoring_name = text, poker_hands = poker_hands, other_card = scoring_hand[i], repetition = true})
+        if check and type(check) == 'table' and next(check) then 
+            for j = 1, check.repetitions do
+                reps[#reps+1] = {seals = check}
+            end
+        end
+    end
+end
+"""

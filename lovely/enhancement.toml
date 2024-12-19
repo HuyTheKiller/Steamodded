@@ -173,7 +173,7 @@ target = "functions/common_events.lua"
 pattern = "if (_c.name == 'Stone Card') then full_UI_table.name = true end"
 match_indent = true
 position = "at"
-payload = "if not specific_vars.playing_card or _c.name == 'Stone Card' or _c.replace_base_card then full_UI_table.name = true"
+payload = "if _c.name == 'Stone Card' or _c.replace_base_card then full_UI_table.name = true"
 [[patches]]
 [patches.pattern]
 target = "functions/common_events.lua"
@@ -199,8 +199,8 @@ pattern = "local jokers = card:calculate_joker(context)"
 match_indent = true
 position = "before"
 payload = """
-if center.set == 'Enhanced' and center.calculate and type(center.calculate) == 'function' then 
-    center:calculate(context, ret)
+if card.ability.set == 'Enhanced' and center.calculate and type(center.calculate) == 'function' then
+    center:calculate(card, context, ret)
     enhancement_calculated = true
 end"""
 [[patches]]
@@ -210,8 +210,8 @@ pattern = "local seals = card:calculate_seal(context)"
 match_indent = true
 position = "before"
 payload = """
-if center.set == 'Enhanced' and center.calculate and type(center.calculate) == 'function' then 
-    center:calculate(context, ret)
+if card.ability.set == 'Enhanced' and center.calculate and type(center.calculate) == 'function' then 
+    center:calculate(card, context, ret)
     enhancement_calculated = true
 end"""
 [[patches]]
@@ -221,8 +221,8 @@ pattern = "if context.cardarea == G.jokers or context.card == G.consumeables the
 match_indent = true
 position = "before"
 payload = """
-if not enhancement_calculated and center.set == 'Enhanced' and center.calculate and type(center.calculate) == 'function' then 
-    center:calculate(context, ret)
+if not enhancement_calculated and card.ability.set == 'Enhanced' and center.calculate and type(center.calculate) == 'function' then 
+    center:calculate(card, context, ret)
     enhancement_calculated = true
 end
 local seals = card:calculate_seal(context)
